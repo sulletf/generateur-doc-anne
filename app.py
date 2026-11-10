@@ -1,7 +1,17 @@
 import docx
 from docx.oxml import parse_xml
 from docx.shared import Inches, Pt
+import easyocr
+import numpy as np
+from PIL import Image
+import pdfplumber
 import streamlit as st
+
+# Charger le moteur OCR une seule fois en cache pour booster la rapidité
+@st.cache_resource
+def load_ocr_reader():
+  return easyocr.Reader(['fr', 'en'])
+
 
 # --- CLASSE DE GÉNÉRATION D'ACCESSIBILITÉ ---
 class AccessibilityDocBuilder:
@@ -51,53 +61,85 @@ class AccessibilityDocBuilder:
     self.doc.save(filename)
 
 
+# --- FONCTIONS D'EXTRACTION DE TEXTE ---
+def extract_text_from_pdf(pdf_file):
+  text = ''
+  with pdfplumber.open(pdf_file) as pdf:
+    for page in pdf.pages:
+      extracted = page.extract_text()
+      if extracted:
+        text += extracted + '\n'
+  return text
+
+
+def extract_text_from_image(image_file):
+  reader = load_ocr_reader()
+  img = Image.open(image_file)
+  img_np = np.array(img)
+  results = reader.readtext(img_np, detail=0)
+  return '\n'.join(results)
+
+
+def extract_text_from_docx(docx_file):
+  doc = docx.Document(docx_file)
+  return '\n'.join([p.text for p in doc.paragraphs if p.text.strip()])
+
+
 # --- INTERFACE STREAMLIT ---
 st.set_page_config(
-    page_title="Générateur Accessible Word",
-    page_icon="📄",
-    layout="centered",
+    page_title="Générateur Accessible Word", page_icon="📄", layout="centered"
 )
 
 st.title("📄 Générateur de documents adaptatifs - Pour Anne")
 st.markdown("""
-Cette application transforme du texte d'exercices en **fichier Word (.docx) structuré et accessible** pour la plage tactile / synthèse vocale d'Anne.
+Cette application permet de charger **n'importe quel type de fichier** (PNG, JPG, PDF, TXT, DOCX), d'en extraire le texte et de générer un fichier Word (.docx) accessible pour la plage tactile d'Anne.
 """)
 
-st.subheader("1. Titre du document")
-titre_exo = st.text_input("Titre de l'exercice :", "Exercice adaptatif")
+st.subheader("1. Charger votre fichier (Image, PDF, Word, Texte)")
 
-st.subheader("2. Charger ou Saisir le contenu")
-
-# Option 1 : Importer un fichier texte
 uploaded_file = st.file_uploader(
-    "Importez un fichier texte (.txt) contenant vos exercices balisés :",
-    type=["txt"],
+    "Glissez-déposez votre document ici :",
+    type=["png", "jpg", "jpeg", "pdf", "txt", "docx"],
 )
 
-st.markdown("**OU**")
+texte_extrait = ""
 
-# Option 2 : Saisie manuelle
-texte_manuel = st.text_area(
-    "Collez/Saisissez votre texte d'exercice ici :",
-    height=200,
+if uploaded_file is not None:
+  file_ext = uploaded_file.name.split(".")[-1].lower()
+
+  with st.spinner("Extraction du texte en cours..."):
+    if file_ext in ["png", "jpg", "jpeg"]:
+      texte_extrait = extract_text_from_image(uploaded_file)
+      st.image(
+          uploaded_file, caption="Image importée", use_container_width=True
+      )
+    elif file_ext == "pdf":
+      texte_extrait = extract_text_from_pdf(uploaded_file)
+    elif file_ext == "docx":
+      texte_extrait = extract_text_from_docx(uploaded_file)
+    elif file_ext == "txt":
+      texte_extrait = uploaded_file.read().decode("utf-8")
+
+  st.success("Texte extrait avec succès !")
+
+st.subheader("2. Révision et balisage du texte")
+st.info(
+    "Vous pouvez réviser ci-dessous le texte extrait. Entourez les expressions"
+    " ou grandeurs mathématiques avec `[M]` et `[/M]` si besoin (ex :"
+    " `[M]4 m[/M]`)."
+)
+
+texte_a_traiter = st.text_area(
+    "Texte brut extrait (modifiable) :",
+    value=texte_extrait,
+    height=250,
     placeholder=(
-        "Exemple :\nLe triangle [M]PIE[/M] rectangle en [M]I[/M] est tel que"
-        " [M]IP=7 cm[/M]."
+        "Le texte extrait s'affichera automatiquement ici. Vous pouvez aussi le"
+        " taper à la main."
     ),
 )
 
-# Détermination du contenu à traiter
-texte_a_traiter = ""
-if uploaded_file is not None:
-  texte_a_traiter = uploaded_file.read().decode("utf-8")
-elif texte_manuel.strip():
-  texte_a_traiter = texte_manuel
-
-syntaxe_guide = st.expander("💡 Rappel de la syntaxe des formules mathématiques")
-syntaxe_guide.write("""
-Encadrez les expressions mathématiques et mesures avec `[M]` et `[/M]`.
-* Exemple : `Le segment [M][DN][/M] mesure [M]4 m[/M] de longueur.`
-""")
+titre_exo = st.text_input("Titre du document Word :", "Exercice adaptatif")
 
 if st.button("Générer le document Word", type="primary"):
   if texte_a_traiter.strip():
@@ -136,4 +178,4 @@ if st.button("Générer le document Word", type="primary"):
       )
     st.success("Document généré avec succès !")
   else:
-    st.error("Veuillez charger un fichier ou saisir du texte avant de continuer.")
+    st.error("Aucun texte à traiter n'a été trouvé.")
