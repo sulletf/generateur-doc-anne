@@ -61,68 +61,79 @@ st.set_page_config(
 st.title("📄 Générateur de documents adaptatifs - Pour Anne")
 st.markdown("""
 Cette application transforme du texte d'exercices en **fichier Word (.docx) structuré et accessible** pour la plage tactile / synthèse vocale d'Anne.
-
-* **Formatage épuré :** Pas de couleur, pas de gras, pas d'italique.
-* **Mathématiques propres :** Objets OMML sans espaces superflues autour des `=` et avec espaces insécables avant les unités.
 """)
 
-st.subheader("Saisir un exercice")
-titre_exo = st.text_input("Titre de l'exercice :", "Exercice 1")
+st.subheader("1. Titre du document")
+titre_exo = st.text_input("Titre de l'exercice :", "Exercice adaptatif")
 
-syntaxe_guide = st.expander("💡 Guide de saisie des formules mathématiques")
-syntaxe_guide.write("""
-Pour séparer le texte normal des formules mathématiques :
-* Encadrez les expressions mathématiques ou grandeurs avec le tag `[M]` et `[/M]`.
-* Exemples :
-  * `Le triangle [M]PIE[/M] rectangle en [M]I[/M] est tel que [M]IP=7 cm[/M].`
-  * `Une longueur de [M]12 m[/M] et une masse de [M]30 kg[/M].`
-""")
+st.subheader("2. Charger ou Saisir le contenu")
 
-texte_brut = st.text_area(
-    "Texte des paragraphes :",
+# Option 1 : Importer un fichier texte
+uploaded_file = st.file_uploader(
+    "Importez un fichier texte (.txt) contenant vos exercices balisés :",
+    type=["txt"],
+)
+
+st.markdown("**OU**")
+
+# Option 2 : Saisie manuelle
+texte_manuel = st.text_area(
+    "Collez/Saisissez votre texte d'exercice ici :",
     height=200,
     placeholder=(
-        "Entrez votre texte ici. Ex:\nSur le schéma, le segment [M][DN][/M]"
-        " mesure [M]4 m[/M] de longueur."
+        "Exemple :\nLe triangle [M]PIE[/M] rectangle en [M]I[/M] est tel que"
+        " [M]IP=7 cm[/M]."
     ),
 )
 
+# Détermination du contenu à traiter
+texte_a_traiter = ""
+if uploaded_file is not None:
+  texte_a_traiter = uploaded_file.read().decode("utf-8")
+elif texte_manuel.strip():
+  texte_a_traiter = texte_manuel
+
+syntaxe_guide = st.expander("💡 Rappel de la syntaxe des formules mathématiques")
+syntaxe_guide.write("""
+Encadrez les expressions mathématiques et mesures avec `[M]` et `[/M]`.
+* Exemple : `Le segment [M][DN][/M] mesure [M]4 m[/M] de longueur.`
+""")
+
 if st.button("Générer le document Word", type="primary"):
-  if texte_brut.strip():
+  if texte_a_traiter.strip():
     builder = AccessibilityDocBuilder()
     builder.add_heading(titre_exo)
 
-    # Découpage ligne par ligne et parsing du tag [M]...[/M]
-    lignes = texte_brut.split('\n')
+    lignes = texte_a_traiter.split("\n")
     for ligne in lignes:
       if not ligne.strip():
         continue
       elements = []
-      parts = ligne.split('[M]')
+      parts = ligne.split("[M]")
       for part in parts:
-        if '[/M]' in part:
-          math_content, rest_text = part.split('[/M]', 1)
-          elements.append(('math', math_content))
+        if "[/M]" in part:
+          math_content, rest_text = part.split("[/M]", 1)
+          elements.append(("math", math_content))
           if rest_text:
-            elements.append(('text', rest_text))
+            elements.append(("text", rest_text))
         else:
           if part:
-            elements.append(('text', part))
+            elements.append(("text", part))
 
       builder.add_paragraph_with_mixed_content(elements)
 
     output_filename = "Exercice_Anne_Accessible.docx"
     builder.save(output_filename)
 
-    with open(output_filename, 'rb') as f:
+    with open(output_filename, "rb") as f:
       st.download_button(
           label="📥 Télécharger le fichier .docx pour Anne",
           data=f,
           file_name=output_filename,
           mime=(
-              'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
           ),
       )
     st.success("Document généré avec succès !")
   else:
-    st.error("Veuillez saisir du texte avant de lancer la génération.")
+    st.error("Veuillez charger un fichier ou saisir du texte avant de continuer.")
