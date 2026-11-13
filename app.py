@@ -1,4 +1,5 @@
 import json
+import time
 import docx
 from docx.oxml import parse_xml
 from docx.shared import Inches, Pt
@@ -73,7 +74,7 @@ class AccessibilityDocBuilder:
         self.doc.save(filename)
 
 
-# --- FONCTION D'INTERPRETATION PAR GEMINI ---
+# --- FONCTION D'INTERPRETATION PAR GEMINI AVEC GESTION DE SATURATION ---
 def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
     client = genai.Client(api_key=api_key)
 
@@ -95,26 +96,42 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
     Analyse le document fourni en suivant scrupuleusement ces consignes et renvoie uniquement le JSON valide, sans texte additionnel autour.
     """
 
-    if mime_type.startswith("image/"):
-        image = Image.open(uploaded_file)
-        response = client.models.generate_content(
-            model="gemini-3.8-flash", contents=[image, prompt]
-        )
-    elif mime_type == "application/pdf":
-        response = client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=[
-                types.Part.from_bytes(data=file_bytes, mime_type="application/pdf"),
-                prompt,
-            ],
-        )
-    else:
-        text_content = file_bytes.decode("utf-8")
-        response = client.models.generate_content(
-            model="gemini-3.8-flash", contents=[text_content, prompt]
-        )
+    # Modèles à tester en cascade en cas de saturation (503)
+    models_to_try = ["gemini-3.8-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    
+    last_exception = None
+    for model_name in models_to_try:
+        for attempt in range(2): # 2 essais par modèle
+            try:
+                if mime_type.startswith("image/"):
+                    image = Image.open(uploaded_file)
+                    response = client.models.generate_content(
+                        model=model_name, contents=[image, prompt]
+                    )
+                elif mime_type == "application/pdf":
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=[
+                            types.Part.from_bytes(data=file_bytes, mime_type="application/pdf"),
+                            prompt,
+                        ],
+                    )
+                else:
+                    text_content = file_bytes.decode("utf-8")
+                    response = client.models.generate_content(
+                        model=model_name, contents=[text_content, prompt]
+                    )
+                
+                return response.text
+            except Exception as e:
+                last_exception = e
+                # Si c'est une erreur 503 ou de surcharge, on attend 2 secondes avant de réessayer
+                if "503" in str(e) or "UNAVAILABLE" in str(e):
+                    time.sleep(2)
+                else:
+                    break # Si c'est une autre erreur, on passe directement au modèle suivant
 
-    return response.text
+    raise last_exception
 
 
 # --- INTERFACE UTILISATEUR ---
@@ -141,7 +158,7 @@ if uploaded_file is not None:
         mime_type = mime_types.get(file_ext, "text/plain")
 
         if st.button("Générer le document Word accessible pour Anne", type="primary"):
-            with st.spinner("Gemini analyse le document avec les règles d'Anne..."):
+            with st.spinner("Gemini analyse le document (si les serveurs sont occupés, réessai automatique en cours)..."):
                 try:
                     raw_result = parse_document_with_gemini(
                         uploaded_file, file_bytes, mime_type, api_key
@@ -173,7 +190,5 @@ if uploaded_file is not None:
 
                 except Exception as e:
                     st.error(
-                        f"Une erreur est survenue lors du traitement avec Gemini : {e}"
+                        f"Les serveurs Google rencontrent une forte affluence (Erreur 503). Veuillez patienter quelques secondes et relancer le clic. Détail : {e}"
                     )
-                    st.text("Réponse brute de l'IA :")
-                    st.code(raw_result if "raw_result" in locals() else str(e))
