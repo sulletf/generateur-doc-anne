@@ -117,24 +117,11 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
             prompt,
         ]
 
-    models_to_try = ["gemini-3.8-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
-    
-    last_exception = None
-    for model_name in models_to_try:
-        try:
-            response = client.models.generate_content(
-                model=model_name, contents=contents_payload
-            )
-            return response.text
-        except Exception as e:
-            last_exception = e
-            if "503" in str(e) or "UNAVAILABLE" in str(e):
-                time.sleep(1)
-                continue
-            else:
-                break
-
-    raise last_exception
+    # Utilisation du modèle actif recommandé
+    response = client.models.generate_content(
+        model="gemini-3.8-flash", contents=contents_payload
+    )
+    return response.text
 
 
 # --- INTERFACE UTILISATEUR ---
