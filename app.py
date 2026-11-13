@@ -1,3 +1,4 @@
+import json
 import os
 import docx
 from docx.oxml import parse_xml
@@ -8,27 +9,19 @@ import pdfplumber
 from PIL import Image
 import streamlit as st
 
-# --- CONFIGURATION DE L'API GEMINI ---
-# Pour sécuriser votre clé, vous pouvez la stocker dans st.secrets["GEMINI_API_KEY"]
-# ou laisser un champ de saisie dans l'interface pour les utilisateurs.
+# --- CONFIGURATION DE L'APPLICATION ---
 st.set_page_config(
     page_title="Générateur Accessible Anne", page_icon="📄", layout="centered"
 )
 
 st.title("📄 Générateur de Documents Adaptés - Pour Anne")
 st.markdown("""
-Cette application permet aux professeurs et aux parents de transformer n'importe quel support (PDF, image, texte) en un **document Word accessible** (avec mode équation OMML et règles d'accessibilité pour Anne).
+Glissez-déposez le document de cours ou d'exercice (PDF, Image, TXT) ci-dessous. 
+L'application le transforme automatiquement en un **document Word accessible** pour Anne.
 """)
 
-# Saisie de la clé API (recommandé pour le partage avec d'autres profs/parents)
-api_key_input = st.text_input(
-    "Entrez votre clé API Google Gemini (ou configurez-la dans Streamlit Secrets)"
-    " :",
-    type="password",
-)
-
-# Utilisation de la clé fournie ou des secrets Streamlit
-api_key = api_key_input or st.secrets.get("GEMINI_API_KEY", "")
+# Récupération automatique de la clé secrète configurée sur Streamlit Cloud
+api_key = st.secrets.get("GEMINI_API_KEY", "")
 
 
 # --- CLASSE DE GÉNÉRATION D'ACCESSIBILITÉ ---
@@ -100,14 +93,12 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
     Assure-toi de bien isoler en "math" toutes les variables, lettres, segments entre crochets, valeurs avec unités et équations.
     """
 
-  # Appel de Gemini selon le type de fichier
   if mime_type.startswith('image/'):
     image = Image.open(uploaded_file)
     response = client.models.generate_content(
         model='gemini-2.5-flash', contents=[image, prompt]
     )
   elif mime_type == 'application/pdf':
-    # Pour un PDF, on peut l'envoyer directement ou extraire les pages
     response = client.models.generate_content(
         model='gemini-2.5-flash',
         contents=[
@@ -126,71 +117,66 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
 
 # --- INTERFACE UTILISATEUR ---
 uploaded_file = st.file_uploader(
-    "Glissez-déposez le document de cours ou d'exercice (PDF, Image, TXT) :",
+    "Importez votre document de cours ou d'exercice (PDF, Image, TXT) :",
     type=["png", "jpg", "jpeg", "pdf", "txt"],
 )
 
-if uploaded_file is not None and api_key:
-  file_bytes = uploaded_file.read()
-  file_ext = uploaded_file.name.split(".")[-1].lower()
-  mime_types = {
-      "png": "image/png",
-      "jpg": "image/jpeg",
-      "jpeg": "image/jpeg",
-      "pdf": "application/pdf",
-      "txt": "text/plain",
-  }
-  mime_type = mime_types.get(file_ext, "text/plain")
+if uploaded_file is not None:
+  if not api_key:
+    st.error(
+        "Erreur de configuration : La clé API Gemini n'est pas configurée dans"
+        " les secrets du serveur Streamlit."
+    )
+  else:
+    file_bytes = uploaded_file.read()
+    file_ext = uploaded_file.name.split('.')[-1].lower()
+    mime_types = {
+        'png': 'image/png',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'pdf': 'application/pdf',
+        'txt': 'text/plain',
+    }
+    mime_type = mime_types.get(file_ext, 'text/plain')
 
-  if st.button(
-      "Générer le document Word accessible pour Anne", type="primary"
-  ):
-    with st.spinner("Gemini analyse le document avec les règles d'Anne..."):
-      try:
-        # Appel à l'intelligence de Gemini
-        raw_result = parse_document_with_gemini(
-            uploaded_file, file_bytes, mime_type, api_key
-        )
-
-        # Nettoyage et conversion de la réponse de Gemini en structure Python
-        import json
-
-        # Extraction propre du bloc JSON si Gemini a mis du texte autour
-        json_str = raw_result
-        if "```json" in raw_result:
-          json_str = raw_result.split("```json")[1].split("```")[0].strip()
-        elif "```" in raw_result:
-          json_str = raw_result.split("```")[1].split("```")[0].strip()
-
-        paragraphs_data = json.loads(json_str)
-
-        # Construction du fichier Word
-        builder = AccessibilityDocBuilder()
-        for p_elements in paragraphs_data:
-          builder.add_paragraph_with_mixed_content(p_elements)
-
-        output_filename = "Document_Anne_Accessible.docx"
-        builder.save(output_filename)
-
-        with open(output_filename, "rb") as f:
-          st.download_button(
-              label="📥 Télécharger le fichier Word (.docx) pour Anne",
-              data=f,
-              file_name=output_filename,
-              mime=(
-                  "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-              ),
+    if st.button(
+        'Générer le document Word accessible pour Anne', type='primary'
+    ):
+      with st.spinner("Gemini analyse le document avec les règles d'Anne..."):
+        try:
+          raw_result = parse_document_with_gemini(
+              uploaded_file, file_bytes, mime_type, api_key
           )
-        st.success("Document généré avec succès par Gemini !")
 
-      except Exception as e:
-        st.error(
-            f"Une erreur est survenue lors du traitement avec Gemini : {e}"
-        )
-        st.text("Réponse brute de l'IA :")
-        st.code(raw_result if "raw_result" in locals() else str(e))
-elif uploaded_file is not None and not api_key:
-  st.warning(
-      "Veuillez entrer votre clé API Gemini ci-dessus pour lancer la"
-      " conversion intelligente."
-  )
+          json_str = raw_result
+          if '```json' in raw_result:
+            json_str = raw_result.split('```json')[1].split('```')[0].strip()
+          elif '```' in raw_result:
+            json_str = raw_result.split('```')[1].split('```')[0].strip()
+
+          paragraphs_data = json.loads(json_str)
+
+          builder = AccessibilityDocBuilder()
+          for p_elements in paragraphs_data:
+            builder.add_paragraph_with_mixed_content(p_elements)
+
+          output_filename = 'Document_Anne_Accessible.docx'
+          builder.save(output_filename)
+
+          with open(output_filename, 'rb') as f:
+            st.download_button(
+                label='📥 Télécharger le fichier Word (.docx) pour Anne',
+                data=f,
+                file_name=output_filename,
+                mime=(
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                ),
+            )
+          st.success('Document généré avec succès par Gemini !')
+
+        except Exception as e:
+          st.error(
+              f'Une erreur est survenue lors du traitement avec Gemini : {e}'
+          )
+          st.text("Réponse brute de l'IA :")
+          st.code(raw_result if 'raw_result' in locals() else str(e))
