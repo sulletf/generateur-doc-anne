@@ -7,6 +7,7 @@ from docx.shared import Inches, Pt
 from google import genai
 from google.genai import types
 from PIL import Image
+import io
 import streamlit as st
 
 # --- CONFIGURATION DE L'APPLICATION ---
@@ -79,8 +80,8 @@ class AccessibilityDocBuilder:
         self.doc.save(filename)
 
 
-# --- FONCTION D'INTERPRETATION PAR GEMINI ---
-def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
+# --- FONCTION D'INTERPRETATION PAR GEMINI ROBUSTE ---
+def parse_document_with_gemini(file_bytes, mime_type, api_key):
     client = genai.Client(api_key=api_key)
 
     prompt = """
@@ -100,19 +101,17 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
     Renvoie uniquement le JSON valide, sans texte additionnel.
     """
 
+    # Gestion propre et robuste du payload selon le type de fichier
     if mime_type == "text/plain":
-        text_content = file_bytes.decode("utf-8", errors="ignore")
-        contents_payload = [text_content, prompt]
+        contents_payload = [file_bytes.decode("utf-8", errors="ignore"), prompt]
     elif mime_type.startswith("image/"):
-        image = Image.open(uploaded_file)
+        image = Image.open(io.BytesIO(file_bytes))
         contents_payload = [image, prompt]
     else:
-        contents_payload = [
-            types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
-            prompt,
-        ]
+        # Pour les PDF et autres formats binaires
+        part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
+        contents_payload = [part, prompt]
 
-    # Utilisation rigoureuse et directe du modèle exigé par l'API
     response = client.models.generate_content(
         model="gemini-3.8-flash", contents=contents_payload
     )
@@ -131,7 +130,7 @@ if uploaded_file is not None:
             "Erreur de configuration : La clé API Gemini n'est pas configurée dans les secrets Streamlit."
         )
     else:
-        file_bytes = uploaded_file.read()
+        file_bytes = uploaded_file.getvalue()
         file_ext = uploaded_file.name.split(".")[-1].lower()
         mime_types = {
             "png": "image/png",
@@ -146,7 +145,7 @@ if uploaded_file is not None:
             with st.spinner("Gemini analyse le document..."):
                 try:
                     raw_result = parse_document_with_gemini(
-                        uploaded_file, file_bytes, mime_type, api_key
+                        file_bytes, mime_type, api_key
                     )
 
                     json_str = raw_result
