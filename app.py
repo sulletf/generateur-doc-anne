@@ -1,13 +1,13 @@
+import io
 import json
-import time
 import re
-import docx
+import time
+from docx import Document
 from docx.oxml import parse_xml
 from docx.shared import Inches, Pt
 from google import genai
 from google.genai import types
 from PIL import Image
-import io
 import streamlit as st
 
 # --- CONFIGURATION DE L'APPLICATION ---
@@ -28,7 +28,7 @@ api_key = st.secrets.get("GEMINI_API_KEY", "")
 class AccessibilityDocBuilder:
 
     def __init__(self):
-        self.doc = docx.Document()
+        self.doc = Document()
         self._setup_margins_and_styles()
 
     def _setup_margins_and_styles(self):
@@ -71,7 +71,10 @@ class AccessibilityDocBuilder:
         p = self.doc.add_paragraph()
         for p_type, content in parts:
             if p_type == "text":
-                p.add_run(content)
+                run = p.add_run(content)
+                run.bold = False
+                run.italic = False
+                run.underline = False
             elif p_type == "math":
                 self.add_math(p, content)
         return p
@@ -80,7 +83,7 @@ class AccessibilityDocBuilder:
         self.doc.save(filename)
 
 
-# --- FONCTION D'INTERPRETATION PAR GEMINI ROBUSTE ---
+# --- FONCTION D'INTERPRETATION AVEC TENTATIVES AUTOMATIQUES (ANTI-503) ---
 def parse_document_with_gemini(file_bytes, mime_type, api_key):
     client = genai.Client(api_key=api_key)
 
@@ -89,8 +92,8 @@ def parse_document_with_gemini(file_bytes, mime_type, api_key):
     
     Règles absolues de mise en forme et d'accessibilité :
     1. AUCUNE mise en forme visuelle : pas de gras, pas d'italique, pas de souligné, pas de couleurs. Du texte brut standard.
-    2. Nettoyage des doublons et artefacts : si le document contient plusieurs exemplaires identiques, n'en garde qu'un seul.
-    3. Mathématiques : identifie tout ce qui relève des mathématiques (formules, équations). Tu peux utiliser la syntaxe LaTeX comme \\sqrt{x} ou x².
+    2. Nettoyage des doublons et artefacts : si le document contient plusieurs exemplaires identiques ou des animations de diaporamas, n'en garde qu'un seul exemplaire propre.
+    3. Mathématiques : identifie tout ce qui relève des mathématiques (formules, équations, variables). Tu peux utiliser la syntaxe LaTeX comme \\sqrt{x} ou x².
     4. Structure de sortie : Renvoie le résultat au format JSON strict (une liste de listes de tuples [type, contenu] avec le type "text" ou "math").
     
     Exemple de structure JSON attendue :
@@ -98,24 +101,39 @@ def parse_document_with_gemini(file_bytes, mime_type, api_key):
        [ ["text", "Calculer "], ["math", "\\sqrt{25}"], ["text", "."] ]
     ]
     
-    Renvoie uniquement le JSON valide, sans texte additionnel.
+    Renvoie uniquement le JSON valide, sans texte additionnel autour.
     """
 
-    # Gestion propre et robuste du payload selon le type de fichier
     if mime_type == "text/plain":
         contents_payload = [file_bytes.decode("utf-8", errors="ignore"), prompt]
     elif mime_type.startswith("image/"):
         image = Image.open(io.BytesIO(file_bytes))
         contents_payload = [image, prompt]
     else:
-        # Pour les PDF et autres formats binaires
         part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
         contents_payload = [part, prompt]
 
-    response = client.models.generate_content(
-        model="gemini-3.8-flash", contents=contents_payload
-    )
-    return response.text
+    # Mécanisme de réessai intelligent en cas d'erreur 503 / UNAVAILABLE
+    max_retries = 3
+    delay = 2
+    last_exception = None
+
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.0-flash", contents=contents_payload
+            )
+            return response.text
+        except Exception as e:
+            last_exception = e
+            if "503" in str(e) or "UNAVAILABLE" in str(e):
+                time.sleep(delay)
+                delay *= 2  # Attente exponentielle (2s, puis 4s, puis 8s)
+                continue
+            else:
+                raise e
+
+    raise last_exception
 
 
 # --- INTERFACE UTILISATEUR ---
@@ -142,7 +160,7 @@ if uploaded_file is not None:
         mime_type = mime_types.get(file_ext, "text/plain")
 
         if st.button("Générer le document Word accessible pour Anne", type="primary"):
-            with st.spinner("Gemini analyse le document..."):
+            with st.spinner("Gemini analyse le document (patientes quelques secondes)..."):
                 try:
                     raw_result = parse_document_with_gemini(
                         file_bytes, mime_type, api_key
@@ -173,4 +191,6 @@ if uploaded_file is not None:
                     st.success("Document généré avec succès !")
 
                 except Exception as e:
-                    st.error(f"Une erreur est survenue : {e}")
+                    st.error(
+                        f"Une erreur est survenue malgré les relances : {e}"
+                    )
