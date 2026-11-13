@@ -100,11 +100,11 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
   if mime_type.startswith("image/"):
     image = Image.open(uploaded_file)
     response = client.models.generate_content(
-        model="gemini-2.5-flash", contents=[image, prompt]
+        model="gemini-2.0-flash", contents=[image, prompt]
     )
   elif mime_type == "application/pdf":
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-2.0-flash",
         contents=[
             types.Part.from_bytes(data=file_bytes, mime_type="application/pdf"),
             prompt,
@@ -113,7 +113,7 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
   else:
     text_content = file_bytes.decode("utf-8")
     response = client.models.generate_content(
-        model="gemini-2.5-flash", contents=[text_content, prompt]
+        model="gemini-2.0-flash", contents=[text_content, prompt]
     )
 
   return response.text
@@ -127,60 +127,3 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
   if not api_key:
-    st.error(
-        "Erreur de configuration : La clé API Gemini n'est pas configurée dans"
-        " les secrets du serveur Streamlit."
-    )
-  else:
-    file_bytes = uploaded_file.read()
-    file_ext = uploaded_file.name.split(".")[-1].lower()
-    mime_types = {
-        "png": "image/png",
-        "jpg": "image/jpeg",
-        "jpeg": "image/jpeg",
-        "pdf": "application/pdf",
-        "txt": "text/plain",
-    }
-    mime_type = mime_types.get(file_ext, "text/plain")
-
-    if st.button(
-        "Générer le document Word accessible pour Anne", type="primary"
-    ):
-      with st.spinner("Gemini analyse le document avec les règles d'Anne..."):
-        try:
-          raw_result = parse_document_with_gemini(
-              uploaded_file, file_bytes, mime_type, api_key
-          )
-
-          json_str = raw_result
-          if "```json" in raw_result:
-            json_str = raw_result.split("```json")[1].split("```")[0].strip()
-          elif "```" in raw_result:
-            json_str = raw_result.split("```")[1].split("```")[0].strip()
-
-          paragraphs_data = json.loads(json_str)
-
-          builder = AccessibilityDocBuilder()
-          for p_elements in paragraphs_data:
-            builder.add_paragraph_with_mixed_content(p_elements)
-
-          output_filename = "Document_Anne_Accessible.docx"
-          builder.save(output_filename)
-
-          with open(output_filename, "rb") as f:
-            st.download_button(
-                label="📥 Télécharger le fichier Word (.docx) pour Anne",
-                data=f,
-                file_name=output_filename,
-                mime=(
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                ),
-            )
-          st.success("Document généré avec succès par Gemini !")
-
-        except Exception as e:
-          st.error(
-              f"Une erreur est survenue lors du traitement avec Gemini : {e}"
-          )
-          st.text("Réponse brute de l'IA :")
-          st.code(raw_result if "raw_result" in locals() else str(e))
