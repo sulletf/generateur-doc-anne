@@ -112,9 +112,9 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
             prompt,
         ]
 
-    # Utilisation du modèle stable et standard de l'API google-genai
+    # Utilisation rigoureuse et directe du modèle exigé par l'API
     response = client.models.generate_content(
-        model="gemini-2.5-flash", contents=contents_payload
+        model="gemini-3.8-flash", contents=contents_payload
     )
     return response.text
 
