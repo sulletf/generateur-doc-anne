@@ -1,5 +1,6 @@
 import json
 import time
+import re
 import docx
 from docx.oxml import parse_xml
 from docx.shared import Inches, Pt
@@ -46,8 +47,17 @@ class AccessibilityDocBuilder:
         paragraph._p.append(parse_xml(omml))
 
     def add_math(self, paragraph, text):
-        """Convertit une expression mathématique en objet OMML propre, sans espaces autour de =."""
+        """Convertit une expression mathématique en objet OMML propre (racines, carrés, etc.)."""
         clean_text = text.replace(" = ", "=").replace(" =", "=").replace("= ", "=")
+
+        # Gestion de la racine carrée LaTeX \sqrt{...} -> conversion en objet OMML natif <m:rad>
+        if "\\sqrt" in clean_text:
+            match = re.search(r'\\sqrt\{([^}]+)\}', clean_text)
+            if match:
+                radicand = match.group(1)
+                xml_rad = f'<m:rad><m:deg/><m:e><m:r><m:t>{radicand}</m:t></m:r></m:e></m:rad>'
+                self._insert_omml(paragraph, xml_rad)
+                return
 
         # Gestion des puissances au carré
         if "²" in clean_text or "^2" in clean_text:
@@ -74,62 +84,55 @@ class AccessibilityDocBuilder:
         self.doc.save(filename)
 
 
-# --- FONCTION D'INTERPRETATION PAR GEMINI AVEC GESTION DE SATURATION ---
+# --- FONCTION D'INTERPRETATION PAR GEMINI ---
 def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
     client = genai.Client(api_key=api_key)
 
     prompt = """
-    Tu es un assistant spécialisé dans l'adaptation de documents pédagogiques de mathématiques pour Anne, une élève aveugle qui utilise une plage braille et une synthèse vocale.
+    Tu es un assistant spécialisé dans l'adaptation de documents pédagogiques pour Anne, une élève aveugle qui utilise une plage braille et une synthèse vocale.
     
     Règles absolues de mise en forme et d'accessibilité :
     1. AUCUNE mise en forme visuelle : pas de gras, pas d'italique, pas de souligné, pas de couleurs. Du texte brut standard.
-    2. Nettoyage des doublons et artefacts : si le document contient plusieurs exemplaires identiques de la même fiche ou des exercices en double sur la même page, n'en garde qu'un seul exemplaire propre et complet. Supprime les artefacts de texte corrompu ou d'impression.
-    3. Mathématiques et géométrie : tu dois identifier avec une extrême précision tout ce qui relève des mathématiques (noms de triangles comme BOL, lettres de sommets, segments entre crochets comme [LO], formules, équations, valeurs numériques avec unités et calculs).
-    4. Structure de sortie : Renvoie le résultat au format JSON strict (une liste de paragraphes, où chaque paragraphe est une liste de tuples [type, contenu] avec le type "text" ou "math").
+    2. Nettoyage des doublons et artefacts : si le document contient plusieurs exemplaires identiques de la même fiche, n'en garde qu'un seul exemplaire propre et complet.
+    3. Mathématiques et géométrie : identifie avec précision tout ce qui relève des mathématiques (formules, équations, variables). Tu peux utiliser la syntaxe LaTeX comme \\sqrt{x} pour les racines carrées ou x² pour les carrés.
+    4. Structure de sortie : Renvoie le résultat au format JSON strict (une liste de listes de tuples [type, contenu] avec le type "text" ou "math").
     
     Exemple de structure JSON attendue :
     [
-       [ ["text", "Le triangle "], ["math", "BOL"], ["text", " est rectangle en "], ["math", "L"], ["text", "."] ],
-       [ ["math", "BO=37"], ["text", " et "], ["math", "BL=12"], ["text", "."] ]
+       [ ["text", "Calculer "], ["math", "\\sqrt{25}"], ["text", "."] ]
     ]
     
-    Analyse le document fourni en suivant scrupuleusement ces consignes et renvoie uniquement le JSON valide, sans texte additionnel autour.
+    Analyse le contenu fourni et renvoie uniquement le JSON valide, sans texte additionnel autour.
     """
 
-    # Modèles à tester en cascade en cas de saturation (503)
+    if mime_type == "text/plain":
+        text_content = file_bytes.decode("utf-8", errors="ignore")
+        contents_payload = [text_content, prompt]
+    elif mime_type.startswith("image/"):
+        image = Image.open(uploaded_file)
+        contents_payload = [image, prompt]
+    else:
+        contents_payload = [
+            types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
+            prompt,
+        ]
+
     models_to_try = ["gemini-3.8-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
     
     last_exception = None
     for model_name in models_to_try:
-        for attempt in range(2): # 2 essais par modèle
-            try:
-                if mime_type.startswith("image/"):
-                    image = Image.open(uploaded_file)
-                    response = client.models.generate_content(
-                        model=model_name, contents=[image, prompt]
-                    )
-                elif mime_type == "application/pdf":
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=[
-                            types.Part.from_bytes(data=file_bytes, mime_type="application/pdf"),
-                            prompt,
-                        ],
-                    )
-                else:
-                    text_content = file_bytes.decode("utf-8")
-                    response = client.models.generate_content(
-                        model=model_name, contents=[text_content, prompt]
-                    )
-                
-                return response.text
-            except Exception as e:
-                last_exception = e
-                # Si c'est une erreur 503 ou de surcharge, on attend 2 secondes avant de réessayer
-                if "503" in str(e) or "UNAVAILABLE" in str(e):
-                    time.sleep(2)
-                else:
-                    break # Si c'est une autre erreur, on passe directement au modèle suivant
+        try:
+            response = client.models.generate_content(
+                model=model_name, contents=contents_payload
+            )
+            return response.text
+        except Exception as e:
+            last_exception = e
+            if "503" in str(e) or "UNAVAILABLE" in str(e):
+                time.sleep(1)
+                continue
+            else:
+                break
 
     raise last_exception
 
@@ -158,7 +161,7 @@ if uploaded_file is not None:
         mime_type = mime_types.get(file_ext, "text/plain")
 
         if st.button("Générer le document Word accessible pour Anne", type="primary"):
-            with st.spinner("Gemini analyse le document (si les serveurs sont occupés, réessai automatique en cours)..."):
+            with st.spinner("Gemini analyse le document..."):
                 try:
                     raw_result = parse_document_with_gemini(
                         uploaded_file, file_bytes, mime_type, api_key
@@ -190,5 +193,5 @@ if uploaded_file is not None:
 
                 except Exception as e:
                     st.error(
-                        f"Les serveurs Google rencontrent une forte affluence (Erreur 503). Veuillez patienter quelques secondes et relancer le clic. Détail : {e}"
+                        f"Une erreur est survenue lors du traitement : {e}"
                     )
