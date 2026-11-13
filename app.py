@@ -84,7 +84,7 @@ class AccessibilityDocBuilder:
         self.doc.save(filename)
 
 
-# --- FONCTION D'INTERPRETATION PAR GEMINI ---
+# --- FONCTION D'INTERPRETATION PAR GEMINI AVEC CASCADE ANTI-SATURATION ---
 def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
     client = genai.Client(api_key=api_key)
 
@@ -117,11 +117,27 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
             prompt,
         ]
 
-    # Utilisation du modèle actif recommandé par l'API
-    response = client.models.generate_content(
-        model="gemini-3.8-flash", contents=contents_payload
-    )
-    return response.text
+    # Cascade de secours robuste : si le modèle principal est surchargé, l'application essaie automatiquement les alias disponibles
+    models_to_try = ["gemini-3.8-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    
+    last_exception = None
+    for model_name in models_to_try:
+        for attempt in range(2): # 2 tentatives par modèle
+            try:
+                response = client.models.generate_content(
+                    model=model_name, contents=contents_payload
+                )
+                return response.text
+            except Exception as e:
+                last_exception = e
+                # Si c'est une saturation (503) ou un modèle non trouvé (404), on patiente et on bascule
+                if "503" in str(e) or "UNAVAILABLE" in str(e) or "404" in str(e) or "NOT_FOUND" in str(e):
+                    time.sleep(1)
+                    continue
+                else:
+                    break
+
+    raise last_exception
 
 
 # --- INTERFACE UTILISATEUR ---
@@ -148,7 +164,7 @@ if uploaded_file is not None:
         mime_type = mime_types.get(file_ext, "text/plain")
 
         if st.button("Générer le document Word accessible pour Anne", type="primary"):
-            with st.spinner("Gemini analyse le document..."):
+            with st.spinner("Gemini analyse le document (bascule automatique si surcharge)..."):
                 try:
                     raw_result = parse_document_with_gemini(
                         uploaded_file, file_bytes, mime_type, api_key
@@ -180,5 +196,5 @@ if uploaded_file is not None:
 
                 except Exception as e:
                     st.error(
-                        f"Une erreur est survenue lors du traitement : {e}"
+                        f"Les serveurs Google subissent une forte affluence. Veuillez relancer dans un instant. Détail : {e}"
                     )
