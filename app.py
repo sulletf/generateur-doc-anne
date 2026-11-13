@@ -38,60 +38,53 @@ class AccessibilityDocBuilder:
 
   def add_math(self, paragraph, text):
     """Convertit une expression mathématique en objet OMML propre."""
-    # Nettoyage des espaces superflus autour du signe égal
     clean_text = text.replace(' = ', '=').replace(' =', '=').replace('= ', '=')
     
-    # Ajout des espaces insécables avant les unités
-    units = ['cm', 'mm', 'm', 'km', 'L', 'dL', 'g', 'kg', '°', 'pieds']
-    for unit in units:
-      clean_text = clean_text.replace(f' {unit}', f'\u00a0{unit}')
-
     # Gestion des puissances au carré (ex: ER² ou ER^2)
-    clean_text = re.sub(r'([A-Za-z]+)²', r'<m:sSup><m:e><m:r><m:t>\1</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>', clean_text)
-    
-    # Si le texte contient déjà du balisage OMML transformé, on l'insère tel quel, sinon en texte simple formaté
-    if '<m:' in clean_text:
-      self._insert_omml(paragraph, clean_text)
+    clean_text = clean_text.replace('^2', '²')
+    if '²' in clean_text:
+      parts_sup = clean_text.split('²')
+      base = parts_sup[0]
+      rest = parts_sup[1] if len(parts_sup) > 1 else ''
+      xml_sup = f'<m:sSup><m:e><m:r><m:t>{base}</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>{rest}'
+      self._insert_omml(paragraph, xml_sup)
     else:
       self._insert_omml(paragraph, f'<m:r><m:t>{clean_text}</m:t></m:r>')
 
   def add_smart_paragraph(self, paragraph_text):
-    """Analyse intelligemment le texte pour détecter les blocs mathématiques,
+    """Analyse le texte en se basant sur les délimitors $...$ du PDF source
 
-    les carrés, les segments et les égalités.
+    ainsi que sur une détection automatique des segments ou unités.
     """
     p = self.doc.add_paragraph()
 
-    # Pattern élargi pour capturer :
-    # - Les segments entre crochets ([ER], [.......])
-    # - Les expressions avec des carrés (ER², ME²)
-    # - Les égalités ou calculs mathématiques (ER2=..., etc.)
-    # - Les valeurs avec unités
-    pattern = re.compile(
-        r'(\[[A-Z\.]{2,}\]|\b[A-Za-z]+(?:\s*²|\^2)?\s*=\s*[^,\.\s]+|\d+(?:[,\.]\d+)?\s*(?:cm|mm|m|km|pieds|°))',
-        re.IGNORECASE,
-    )
-
-    last_end = 0
-    for match in pattern.finditer(paragraph_text):
-      start, end = match.span()
-      if start > last_end:
-        p.add_run(paragraph_text[last_end:start])
-
-      math_expr = match.group(0)
-      
-      # Transformation spécifique pour les puissances de type ER² ou ER^2 vers OMML natif
-      if '²' in math_expr:
-        base, rest = math_expr.split('²', 1)
-        xml_sup = f'<m:sSup><m:e><m:r><m:t>{base}</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>{rest}'
-        self._insert_omml(p, xml_sup)
-      else:
-        self.add_math(p, math_expr)
-        
-      last_end = end
-
-    if last_end < len(paragraph_text):
-      p.add_run(paragraph_text[last_end:])
+    # Si le texte contient des $ (provenant du PDF), on découpe par paires de $
+    if '$' in paragraph_text:
+      parts = paragraph_text.split('$')
+      for i, part in enumerate(parts):
+        if not part:
+          continue
+        if i % 2 == 1:
+          # Impair = à l'intérieur des $, c'est une formule mathématique
+          self.add_math(p, part)
+        else:
+          # Pair = texte normal
+          p.add_run(part)
+    else:
+      # Fallback : si pas de $, on applique une détection automatique par regex
+      pattern = re.compile(
+          r'(\[[A-Z\.]{2,}\]|\b[A-Za-z]+(?:\s*²|\^2)?\s*=\s*[^,\.\s]+|\d+(?:[,\.]\d+)?\s*(?:cm|mm|m|km|pieds|°))',
+          re.IGNORECASE,
+      )
+      last_end = 0
+      for match in pattern.finditer(paragraph_text):
+        start, end = match.span()
+        if start > last_end:
+          p.add_run(paragraph_text[last_end:start])
+        self.add_math(p, match.group(0))
+        last_end = end
+      if last_end < len(paragraph_text):
+        p.add_run(paragraph_text[last_end:])
 
     return p
 
@@ -161,8 +154,6 @@ if uploaded_file is not None:
 
   with st.expander("Voir le texte brut extrait du fichier"):
     st.text(texte_extrait)
-
-  # Suppression du champ de titre non désiré : on génère directement le document à partir du contenu extrait
 
   if st.button('Télécharger le fichier Word pour Anne', type='primary'):
     builder = AccessibilityDocBuilder()
