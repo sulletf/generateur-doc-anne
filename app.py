@@ -83,7 +83,7 @@ class AccessibilityDocBuilder:
         self.doc.save(filename)
 
 
-# --- FONCTION D'INTERPRETATION AVEC TENTATIVES AUTOMATIQUES (ANTI-503) ---
+# --- FONCTION D'INTERPRETATION AVEC LE BON MODÈLE ET RETRY ---
 def parse_document_with_gemini(file_bytes, mime_type, api_key):
     client = genai.Client(api_key=api_key)
 
@@ -113,7 +113,6 @@ def parse_document_with_gemini(file_bytes, mime_type, api_key):
         part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
         contents_payload = [part, prompt]
 
-    # Mécanisme de réessai intelligent en cas d'erreur 503 / UNAVAILABLE
     max_retries = 3
     delay = 2
     last_exception = None
@@ -121,14 +120,14 @@ def parse_document_with_gemini(file_bytes, mime_type, api_key):
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
-                model="gemini-2.0-flash", contents=contents_payload
+                model="gemini-3.8-flash", contents=contents_payload
             )
             return response.text
         except Exception as e:
             last_exception = e
             if "503" in str(e) or "UNAVAILABLE" in str(e):
                 time.sleep(delay)
-                delay *= 2  # Attente exponentielle (2s, puis 4s, puis 8s)
+                delay *= 2
                 continue
             else:
                 raise e
@@ -160,7 +159,7 @@ if uploaded_file is not None:
         mime_type = mime_types.get(file_ext, "text/plain")
 
         if st.button("Générer le document Word accessible pour Anne", type="primary"):
-            with st.spinner("Gemini analyse le document (patientes quelques secondes)..."):
+            with st.spinner("Gemini analyse le document..."):
                 try:
                     raw_result = parse_document_with_gemini(
                         file_bytes, mime_type, api_key
@@ -192,5 +191,5 @@ if uploaded_file is not None:
 
                 except Exception as e:
                     st.error(
-                        f"Une erreur est survenue malgré les relances : {e}"
+                        f"Une erreur est survenue lors du traitement : {e}"
                     )
