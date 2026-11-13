@@ -20,7 +20,6 @@ Glissez-déposez le document de cours ou d'exercice (PDF, Image, TXT) ci-dessous
 L'application le transforme automatiquement en un **document Word accessible** pour Anne.
 """)
 
-# Récupération automatique de la clé secrète configurée sur Streamlit Cloud
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 
 
@@ -47,10 +46,8 @@ class AccessibilityDocBuilder:
         paragraph._p.append(parse_xml(omml))
 
     def add_math(self, paragraph, text):
-        """Convertit une expression mathématique en objet OMML propre (racines, carrés, etc.)."""
         clean_text = text.replace(" = ", "=").replace(" =", "=").replace("= ", "=")
 
-        # Gestion de la racine carrée LaTeX \sqrt{...} -> conversion en objet OMML natif <m:rad>
         if "\\sqrt" in clean_text:
             match = re.search(r'\\sqrt\{([^}]+)\}', clean_text)
             if match:
@@ -59,7 +56,6 @@ class AccessibilityDocBuilder:
                 self._insert_omml(paragraph, xml_rad)
                 return
 
-        # Gestion des puissances au carré
         if "²" in clean_text or "^2" in clean_text:
             clean_text = clean_text.replace("^2", "²")
             parts = clean_text.split("²")
@@ -71,7 +67,6 @@ class AccessibilityDocBuilder:
             self._insert_omml(paragraph, f"<m:r><m:t>{clean_text}</m:t></m:r>")
 
     def add_paragraph_with_mixed_content(self, parts):
-        """Ajoute un paragraphe contenant un mix de texte normal et de balises mathématiques."""
         p = self.doc.add_paragraph()
         for p_type, content in parts:
             if p_type == "text":
@@ -84,7 +79,7 @@ class AccessibilityDocBuilder:
         self.doc.save(filename)
 
 
-# --- FONCTION D'INTERPRETATION PAR GEMINI AVEC CASCADE ANTI-SATURATION ---
+# --- FONCTION D'INTERPRETATION PAR GEMINI ---
 def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
     client = genai.Client(api_key=api_key)
 
@@ -93,8 +88,8 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
     
     Règles absolues de mise en forme et d'accessibilité :
     1. AUCUNE mise en forme visuelle : pas de gras, pas d'italique, pas de souligné, pas de couleurs. Du texte brut standard.
-    2. Nettoyage des doublons et artefacts : si le document contient plusieurs exemplaires identiques de la même fiche, n'en garde qu'un seul exemplaire propre et complet.
-    3. Mathématiques et géométrie : identifie avec précision tout ce qui relève des mathématiques (formules, équations, variables). Tu peux utiliser la syntaxe LaTeX comme \\sqrt{x} pour les racines carrées ou x² pour les carrés.
+    2. Nettoyage des doublons et artefacts : si le document contient plusieurs exemplaires identiques, n'en garde qu'un seul.
+    3. Mathématiques : identifie tout ce qui relève des mathématiques (formules, équations). Tu peux utiliser la syntaxe LaTeX comme \\sqrt{x} ou x².
     4. Structure de sortie : Renvoie le résultat au format JSON strict (une liste de listes de tuples [type, contenu] avec le type "text" ou "math").
     
     Exemple de structure JSON attendue :
@@ -102,7 +97,7 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
        [ ["text", "Calculer "], ["math", "\\sqrt{25}"], ["text", "."] ]
     ]
     
-    Analyse le contenu fourni et renvoie uniquement le JSON valide, sans texte additionnel autour.
+    Renvoie uniquement le JSON valide, sans texte additionnel.
     """
 
     if mime_type == "text/plain":
@@ -117,27 +112,11 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
             prompt,
         ]
 
-    # Cascade de secours robuste : si le modèle principal est surchargé, l'application essaie automatiquement les alias disponibles
-    models_to_try = ["gemini-3.8-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
-    
-    last_exception = None
-    for model_name in models_to_try:
-        for attempt in range(2): # 2 tentatives par modèle
-            try:
-                response = client.models.generate_content(
-                    model=model_name, contents=contents_payload
-                )
-                return response.text
-            except Exception as e:
-                last_exception = e
-                # Si c'est une saturation (503) ou un modèle non trouvé (404), on patiente et on bascule
-                if "503" in str(e) or "UNAVAILABLE" in str(e) or "404" in str(e) or "NOT_FOUND" in str(e):
-                    time.sleep(1)
-                    continue
-                else:
-                    break
-
-    raise last_exception
+    # Utilisation du modèle stable et standard de l'API google-genai
+    response = client.models.generate_content(
+        model="gemini-2.5-flash", contents=contents_payload
+    )
+    return response.text
 
 
 # --- INTERFACE UTILISATEUR ---
@@ -149,7 +128,7 @@ uploaded_file = st.file_uploader(
 if uploaded_file is not None:
     if not api_key:
         st.error(
-            "Erreur de configuration : La clé API Gemini n'est pas configurée dans les secrets du serveur Streamlit."
+            "Erreur de configuration : La clé API Gemini n'est pas configurée dans les secrets Streamlit."
         )
     else:
         file_bytes = uploaded_file.read()
@@ -164,7 +143,7 @@ if uploaded_file is not None:
         mime_type = mime_types.get(file_ext, "text/plain")
 
         if st.button("Générer le document Word accessible pour Anne", type="primary"):
-            with st.spinner("Gemini analyse le document (bascule automatique si surcharge)..."):
+            with st.spinner("Gemini analyse le document..."):
                 try:
                     raw_result = parse_document_with_gemini(
                         uploaded_file, file_bytes, mime_type, api_key
@@ -192,9 +171,7 @@ if uploaded_file is not None:
                             file_name=output_filename,
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         )
-                    st.success("Document généré avec succès par Gemini !")
+                    st.success("Document généré avec succès !")
 
                 except Exception as e:
-                    st.error(
-                        f"Les serveurs Google subissent une forte affluence. Veuillez relancer dans un instant. Détail : {e}"
-                    )
+                    st.error(f"Une erreur est survenue : {e}")
