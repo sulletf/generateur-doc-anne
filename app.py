@@ -32,54 +32,64 @@ class AccessibilityDocBuilder:
     normal_style.font.name = 'Calibri'
     normal_style.font.size = Pt(12)
 
-  def add_heading(self, title):
-    p = self.doc.add_paragraph()
-    p.paragraph_format.space_before = Pt(14)
-    p.paragraph_format.space_after = Pt(6)
-    p.add_run(title)
-
   def _insert_omml(self, paragraph, xml_content):
     omml = f'<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">{xml_content}</m:oMath>'
     paragraph._p.append(parse_xml(omml))
 
   def add_math(self, paragraph, text):
-    """Nettoie et formate automatiquement les formules mathématiques."""
+    """Convertit une expression mathématique en objet OMML propre."""
+    # Nettoyage des espaces superflus autour du signe égal
     clean_text = text.replace(' = ', '=').replace(' =', '=').replace('= ', '=')
+    
+    # Ajout des espaces insécables avant les unités
     units = ['cm', 'mm', 'm', 'km', 'L', 'dL', 'g', 'kg', '°', 'pieds']
     for unit in units:
       clean_text = clean_text.replace(f' {unit}', f'\u00a0{unit}')
-    self._insert_omml(paragraph, f'<m:r><m:t>{clean_text}</m:t></m:r>')
+
+    # Gestion des puissances au carré (ex: ER² ou ER^2)
+    clean_text = re.sub(r'([A-Za-z]+)²', r'<m:sSup><m:e><m:r><m:t>\1</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>', clean_text)
+    
+    # Si le texte contient déjà du balisage OMML transformé, on l'insère tel quel, sinon en texte simple formaté
+    if '<m:' in clean_text:
+      self._insert_omml(paragraph, clean_text)
+    else:
+      self._insert_omml(paragraph, f'<m:r><m:t>{clean_text}</m:t></m:r>')
 
   def add_smart_paragraph(self, paragraph_text):
-    """Analyse automatiquement le texte pour isoler les portions mathématiques
+    """Analyse intelligemment le texte pour détecter les blocs mathématiques,
 
-    (segments entre crochets, valeurs avec unités, équations, etc.).
+    les carrés, les segments et les égalités.
     """
     p = self.doc.add_paragraph()
 
-    # Expression régulière pour détecter :
-    # 1. Les segments géométriques (ex: [DN], [AB])
-    # 2. Les valeurs numériques suivies d'unités (ex: 4 m, 4,20 cm, 20 pieds)
-    # 3. Les expressions de type RS=9,7 cm ou des variables isolées si besoin
-    # Vous pouvez enrichir ce pattern selon vos besoins
+    # Pattern élargi pour capturer :
+    # - Les segments entre crochets ([ER], [.......])
+    # - Les expressions avec des carrés (ER², ME²)
+    # - Les égalités ou calculs mathématiques (ER2=..., etc.)
+    # - Les valeurs avec unités
     pattern = re.compile(
-        r'(\[[A-Z]{2}\]|\d+(?:[,\.]\d+)?\s*(?:cm|mm|m|km|pieds|°))',
+        r'(\[[A-Z\.]{2,}\]|\b[A-Za-z]+(?:\s*²|\^2)?\s*=\s*[^,\.\s]+|\d+(?:[,\.]\d+)?\s*(?:cm|mm|m|km|pieds|°))',
         re.IGNORECASE,
     )
 
     last_end = 0
     for match in pattern.finditer(paragraph_text):
       start, end = match.span()
-      # Texte normal avant la formule
       if start > last_end:
         p.add_run(paragraph_text[last_end:start])
 
-      # Élément mathématique détecté automatiquement
       math_expr = match.group(0)
-      self.add_math(p, math_expr)
+      
+      # Transformation spécifique pour les puissances de type ER² ou ER^2 vers OMML natif
+      if '²' in math_expr:
+        base, rest = math_expr.split('²', 1)
+        xml_sup = f'<m:sSup><m:e><m:r><m:t>{base}</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>{rest}'
+        self._insert_omml(p, xml_sup)
+      else:
+        self.add_math(p, math_expr)
+        
       last_end = end
 
-    # Reste du texte de la fin de ligne
     if last_end < len(paragraph_text):
       p.add_run(paragraph_text[last_end:])
 
@@ -121,7 +131,7 @@ st.set_page_config(
 st.title("📄 Générateur Automatique de Documents - Pour Anne")
 st.markdown("""
 Glissez simplement **un fichier ou une capture d'écran** de votre manuel ci-dessous. 
-L'application extrait le texte, détecte automatiquement les mathématiques/unités et génère le fichier `.docx` prêt pour Anne, sans intervention manuelle !
+L'application extrait le texte, convertit les mathématiques en objets natifs et génère le fichier `.docx` propre !
 """)
 
 uploaded_file = st.file_uploader(
@@ -149,24 +159,20 @@ if uploaded_file is not None:
 
   st.success('Extraction et traitement automatiques réussis !')
 
-  # Aperçu du texte extrait brut pour information
   with st.expander("Voir le texte brut extrait du fichier"):
     st.text(texte_extrait)
 
-  titre_exo = st.text_input(
-      'Titre du document Word généré :', 'Exercice adaptatif'
-  )
+  # Suppression du champ de titre non désiré : on génère directement le document à partir du contenu extrait
 
   if st.button('Télécharger le fichier Word pour Anne', type='primary'):
     builder = AccessibilityDocBuilder()
-    builder.add_heading(titre_exo)
 
     lignes = texte_extrait.split('\n')
     for ligne in lignes:
       if ligne.strip():
         builder.add_smart_paragraph(ligne.strip())
 
-    output_filename = 'Exercice_Anne_Automatique.docx'
+    output_filename = 'Document_Anne_Accessible.docx'
     builder.save(output_filename)
 
     with open(output_filename, 'rb') as f:
@@ -178,4 +184,4 @@ if uploaded_file is not None:
               'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
           ),
       )
-    st.success('Fichiers générés et prêts à être téléchargés !')
+    st.success('Fichier généré et prêt à être téléchargé !')
