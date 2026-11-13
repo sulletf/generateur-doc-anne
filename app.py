@@ -84,7 +84,7 @@ class AccessibilityDocBuilder:
         self.doc.save(filename)
 
 
-# --- FONCTION D'INTERPRETATION PAR GEMINI AVEC CASCADE ANTI-SATURATION ---
+# --- FONCTION D'INTERPRETATION PAR GEMINI ---
 def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
     client = genai.Client(api_key=api_key)
 
@@ -117,8 +117,8 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
             prompt,
         ]
 
-    # Liste des modèles testés en cascade si l'un d'eux renvoie une erreur 503 ou 404
-    models_to_try = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
+    # Utilisation ciblée et propre du modèle standard actuel avec réessai en cas de saturation (503)
+    models_to_try = ["gemini-2.0-flash", "gemini-3.8-flash"]
     
     last_exception = None
     for model_name in models_to_try:
@@ -129,9 +129,8 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
             return response.text
         except Exception as e:
             last_exception = e
-            # Si c'est une saturation (503) ou un modèle introuvable (404), on essaie le suivant
-            if "503" in str(e) or "UNAVAILABLE" in str(e) or "404" in str(e) or "NOT_FOUND" in str(e):
-                time.sleep(1)
+            if "503" in str(e) or "UNAVAILABLE" in str(e):
+                time.sleep(2)
                 continue
             else:
                 break
@@ -163,7 +162,7 @@ if uploaded_file is not None:
         mime_type = mime_types.get(file_ext, "text/plain")
 
         if st.button("Générer le document Word accessible pour Anne", type="primary"):
-            with st.spinner("Gemini analyse le document (bascule automatique si serveur chargé)..."):
+            with st.spinner("Gemini analyse le document..."):
                 try:
                     raw_result = parse_document_with_gemini(
                         uploaded_file, file_bytes, mime_type, api_key
@@ -195,5 +194,5 @@ if uploaded_file is not None:
 
                 except Exception as e:
                     st.error(
-                        f"Les serveurs Google sont temporairement surchargés. Veuillez patienter quelques secondes et relancer. Détail : {e}"
+                        f"Une erreur est survenue lors du traitement : {e}"
                     )
