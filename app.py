@@ -98,11 +98,11 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
     if mime_type.startswith("image/"):
         image = Image.open(uploaded_file)
         response = client.models.generate_content(
-            model="gemini-2.0-flash", contents=[image, prompt]
+            model="gemini-3.8-flash", contents=[image, prompt]
         )
     elif mime_type == "application/pdf":
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.8-flash",
             contents=[
                 types.Part.from_bytes(data=file_bytes, mime_type="application/pdf"),
                 prompt,
@@ -111,7 +111,7 @@ def parse_document_with_gemini(uploaded_file, file_bytes, mime_type, api_key):
     else:
         text_content = file_bytes.decode("utf-8")
         response = client.models.generate_content(
-            model="gemini-2.0-flash", contents=[text_content, prompt]
+            model="gemini-3.8-flash", contents=[text_content, prompt]
         )
 
     return response.text
